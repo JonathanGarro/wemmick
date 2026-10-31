@@ -4,6 +4,8 @@ import SwiftUI
 struct HomeView: View {
     @Environment(Store.self) private var store
     @State private var stats: HomeStats?
+    @State private var storage: Storage?
+    @State private var freeing = false
 
     var body: some View {
         Group {
@@ -11,9 +13,9 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Data")
-        .navigationSubtitle("Every meeting, processed here or imported from Obsidian")
         .task(id: store.revision) {
             stats = try? await API.get(["api", "home"])
+            storage = try? await API.get(["api", "storage"])
             if store.people.isEmpty { await store.loadPeople() }
         }
     }
@@ -21,6 +23,7 @@ struct HomeView: View {
     private func content(_ s: HomeStats) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if let storage { card("Storage") { StorageBar(storage: storage) { freeing = true } } }
                 tiles(s)
                 card("Meetings per month") { MonthChart(rows: s.byMonth) }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 20, alignment: .top)], spacing: 20) {
@@ -40,22 +43,36 @@ struct HomeView: View {
             .frame(maxWidth: 1100)
             .frame(maxWidth: .infinity)
         }
+        .sheet(isPresented: $freeing) {
+            if let storage {
+                FreeUpSpace(recordings: storage.recordings) {
+                    self.storage = try? await API.get(["api", "storage"])
+                }
+            }
+        }
     }
 
+    // one row of equal tiles across the page, or a grid when the window's too narrow for that
     private func tiles(_ s: HomeStats) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
-            tile(number(s.meetings), "meetings")
-            tile(String(format: "%.1f", s.hours), "hours recorded")
-            tile(number(s.people), "people met")
-            tile(number(s.voices), "voices known")
-            if let share = s.ownerShare { tile("\(Int((share * 100).rounded()))%", "of talk time is you") }
-            if let review = s.review, review > 0 {
-                Button { store.section = .inbox } label: {
-                    tile(number(review), "meetings to review", warn: true)
-                }
-                .buttonStyle(.plain)
-                .help("Open the Inbox")
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { tileList(s) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) { tileList(s) }
+        }
+    }
+
+    @ViewBuilder
+    private func tileList(_ s: HomeStats) -> some View {
+        tile(number(s.meetings), "meetings")
+        tile(String(format: "%.1f", s.hours), "hours recorded")
+        tile(number(s.people), "people met")
+        tile(number(s.voices), "voices known")
+        if let share = s.ownerShare { tile("\(Int((share * 100).rounded()))%", "of talk time is you") }
+        if let review = s.review, review > 0 {
+            Button { store.section = .inbox } label: {
+                tile(number(review), "meetings to review", warn: true)
             }
+            .buttonStyle(.plain)
+            .help("Open the Inbox")
         }
     }
 
@@ -67,7 +84,8 @@ struct HomeView: View {
             }
             Text(label).font(.callout).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // no least width, so every tile in the row gets the same share
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
     }
@@ -237,5 +255,116 @@ struct RankedBars: View {
             .frame(height: 6)
         }
         .contentShape(Rectangle())
+    }
+}
+
+// the library's size in three parts, with the recordings first since they're the part that
+// can go
+struct StorageBar: View {
+    @Environment(Store.self) private var store
+    let storage: Storage
+    let freeUp: () -> Void
+
+    private var parts: [(label: String, detail: String, bytes: Double, style: AnyShapeStyle)] {
+        [("Recordings", "\(storage.recordings.count) original recordings", storage.recordingsBytes, AnyShapeStyle(store.accentColor)),
+         ("Transcripts and notes", "Kept when a recording is deleted", storage.notesBytes, AnyShapeStyle(store.accentColor.opacity(0.45))),
+         ("App and models", "Python and the transcription and note models", storage.appBytes, AnyShapeStyle(.tertiary))]
+    }
+
+    var body: some View {
+        let total = parts.map(\.bytes).reduce(0, +)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(bytes(total)).font(.title.weight(.semibold)).monospacedDigit()
+                Text("used, \(bytes(storage.freeBytes)) free on this Mac").foregroundStyle(.secondary)
+                Spacer()
+                Button("Free Up Space...", action: freeUp)
+                    .disabled(storage.recordings.isEmpty)
+            }
+            GeometryReader { geo in
+                HStack(spacing: 2) {
+                    ForEach(parts, id: \.label) { part in
+                        Rectangle().fill(part.style)
+                            .frame(width: max(2, (geo.size.width - 4) * part.bytes / max(total, 1)))
+                    }
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 10)
+            HStack(alignment: .top, spacing: 24) {
+                ForEach(parts, id: \.label) { part in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Circle().fill(part.style).frame(width: 8, height: 8)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(part.label): \(bytes(part.bytes))").monospacedDigit()
+                            Text(part.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// recordings to delete, biggest first. a meeting keeps its transcript and note, but can't be
+// played back or transcribed again
+struct FreeUpSpace: View {
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let recordings: [Storage.Recording]
+    let reload: () async -> Void
+    @State private var picked: Set<String> = []
+    @State private var confirming = false
+
+    private var pickedBytes: Double { recordings.filter { picked.contains($0.id) }.map(\.bytes).reduce(0, +) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Free Up Space").font(.title2.weight(.semibold))
+            Text("Deleting a recording keeps its meeting's transcript and note, but it can't be played back or transcribed again.")
+                .foregroundStyle(.secondary)
+            Table(recordings, selection: $picked) {
+                TableColumn("Meeting") { r in Text(r.title ?? r.meetingId) }
+                TableColumn("Date") { r in Text(r.date ?? "") }
+                    .width(90)
+                TableColumn("Status") { r in Text(r.archived == nil ? "Inbox" : "Archived").foregroundStyle(.secondary) }
+                    .width(70)
+                TableColumn("Size") { r in Text(bytes(r.bytes)).monospacedDigit() }
+                    .width(70)
+            }
+            .frame(minHeight: 320)
+            HStack {
+                Button("Select Archived") { picked = Set(recordings.filter { $0.archived != nil }.map(\.id)) }
+                    .help("Pick every recording whose meeting is done")
+                Text(picked.isEmpty ? "Pick recordings, with cmd or shift for more than one"
+                     : "\(picked.count) picked, \(bytes(pickedBytes))")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Delete Recordings...", role: .destructive) { confirming = true }
+                    .disabled(picked.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 620, minHeight: 480)
+        .confirmationDialog("Delete \(picked.count) recording\(picked.count == 1 ? "" : "s")?", isPresented: $confirming) {
+            Button("Delete", role: .destructive) { Task { await drop() } }
+        } message: {
+            Text("They move to the Trash, freeing \(bytes(pickedBytes)) once it's emptied. The meetings keep their transcripts and notes.")
+        }
+    }
+
+    private func drop() async {
+        let ids = Array(picked)
+        await store.run {
+            let result: Dropped = try await API.post(["api", "storage", "drop-recordings"], DropRecordings(meetingIds: ids))
+            let moved = ids.count - result.skipped.count
+            store.show("Moved \(moved) recording\(moved == 1 ? "" : "s") to the Trash, \(bytes(result.freed)). Empty it to free the space."
+                       + (result.skipped.isEmpty ? "" : " \(result.skipped.count) still being worked on were left."))
+        }
+        await reload()
+        dismiss()
     }
 }

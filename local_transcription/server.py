@@ -75,6 +75,26 @@ def _trash(path):
     os.rename(path, _unique_path(trash, path.name))
 
 
+def _size(path):
+    """bytes in a file, or in every file under a folder."""
+    path = Path(path)
+    if path.is_file():
+        return path.stat().st_size
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file() and not p.is_symlink()) if path.is_dir() else 0
+
+
+def _own_recording(meeting_id):
+    """a meeting's original recording, when it's in the library's data folder rather than
+    somewhere else on the mac."""
+    run = pipeline.OUTPUT_DIR / meeting_id / "run.json"
+    if not run.exists():
+        return None
+    source = pipeline.source_path(json.loads(run.read_text()))
+    if source.exists() and source.resolve().is_relative_to(paths.DATA_DIR.resolve()):
+        return source
+    return None
+
+
 def _dated_name(name):
     """'2026-10-16 - Zoom Call.mp3' stays as it is. a date elsewhere in the name moves to the
     front, and a name with no date gets today's."""
@@ -235,6 +255,10 @@ class Jobs:
         pipeline.write_note(pipeline.meeting_dir(job["meeting_id"]), backend=job["backend"],
                             project=job["project"], progress=progress, template=job.get("template"))
         self._update(job, status="done", step="done", progress=1.0)
+
+
+class RecordingsRequest(BaseModel):
+    meeting_ids: list[str]
 
 
 class ApplyRequest(BaseModel):
@@ -1123,6 +1147,43 @@ def create_app():
             _trash(source)
         library.delete_meeting(meeting_id)
         return {"ok": True}
+
+    @app.get("/api/storage")
+    def storage():
+        """what the library takes up: each meeting's original recording, which can go to free
+        space, then the transcripts and notes, and the app's python and models, which can't."""
+        recordings = []
+        for m in _records(library.meetings()):
+            source = _own_recording(m["meeting_id"])
+            if source:
+                recordings.append({"meeting_id": m["meeting_id"], "title": m.get("title"), "date": m.get("date"),
+                                   "archived": m.get("archived"), "bytes": source.stat().st_size})
+        recordings.sort(key=lambda r: r["bytes"], reverse=True)
+        models = {notes._models()["local_model"], hf.WHISPER_REPO, hf.DIARIZATION_REPO}
+        return {"recordings": recordings, "recordings_bytes": sum(r["bytes"] for r in recordings),
+                "notes_bytes": _size(pipeline.OUTPUT_DIR),
+                "app_bytes": _size(paths.HOME / "env") + sum(hf._blob_bytes(repo) for repo in models),
+                "free_bytes": shutil.disk_usage(paths.HOME).free}
+
+    @app.post("/api/storage/drop-recordings")
+    def drop_recordings(request: RecordingsRequest):
+        """move meetings' original recordings to the trash, keeping their transcripts and
+        notes, along with the playback audio made from them. a meeting being worked on is
+        left alone."""
+        busy = {j.get("meeting_id") for j in jobs.snapshot() if j["status"] in ("queued", "processing")}
+        freed, skipped = 0, []
+        for meeting_id in request.meeting_ids:
+            if meeting_id in busy:
+                skipped.append(meeting_id)
+                continue
+            source = _own_recording(meeting_id)
+            if source:
+                freed += source.stat().st_size
+                _trash(source)
+            out_dir = pipeline.OUTPUT_DIR / meeting_id
+            if out_dir.is_dir():
+                freed += pipeline.drop_audio(out_dir)
+        return {"freed": freed, "skipped": skipped}
 
     @app.post("/api/meetings/{meeting_id}/unarchive")
     def unarchive(meeting_id: str):

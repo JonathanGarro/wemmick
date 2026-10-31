@@ -399,6 +399,37 @@ struct HomeStats: Codable {
     let teamsTop: [Count]
 }
 
+// what the library takes up on disk
+struct Storage: Codable {
+    struct Recording: Codable, Identifiable, Hashable {
+        let meetingId: String
+        let title: String?
+        let date: String?
+        let archived: String?
+        let bytes: Double
+
+        var id: String { meetingId }
+    }
+    let recordings: [Recording]
+    let recordingsBytes: Double
+    let notesBytes: Double
+    let appBytes: Double
+    let freeBytes: Double
+}
+
+struct DropRecordings: Encodable {
+    let meetingIds: [String]
+}
+
+struct Dropped: Codable {
+    let freed: Double
+    let skipped: [String]
+}
+
+func bytes(_ n: Double) -> String {
+    Int64(n).formatted(.byteCount(style: .file))
+}
+
 struct Conversation: Codable, Identifiable, Hashable {
     let conversationId: String
     let title: String?
