@@ -281,6 +281,8 @@ struct SettingsState: Codable {
     let usage: Usage
     // whether the plaud cli is on the path, without which the plaud page is hidden
     let plaudInstalled: Bool
+    // whether npm is on the path, to install the plaud cli with. nil from an older server
+    let nodeInstalled: Bool?
     // "things", "todoist", "reminders", or "none"
     let todoApp: String
     let thingsInstalled: Bool

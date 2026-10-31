@@ -331,15 +331,26 @@ struct SettingsView: View {
                 plaudAccount
                     .disabled(!plaudEnabled)
             } else {
+                // node first if it's missing, since npm comes with it, then the cli
+                let node = s.nodeInstalled ?? true
                 LabeledContent {
-                    Button("Copy Command") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString("npm install -g @plaud-ai/cli", forType: .string)
+                    HStack {
+                        if !node {
+                            Link("Get Node.js", destination: URL(string: "https://nodejs.org/en/download")!)
+                        }
+                        Button("Copy Command") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString("npm install -g @plaud-ai/cli", forType: .string)
+                        }
+                        Button("Check Again") { Task { await reloadSettings() } }
                     }
                 } label: {
-                    Text("Plaud CLI not installed")
-                    Text("Importing from Plaud needs its command line tool. Install it with npm install -g @plaud-ai/cli in Terminal, then restart Wemmick.")
+                    Text(node ? "Plaud CLI not installed" : "Plaud needs Node.js")
+                    Text(node ? "Importing from Plaud needs Plaud's command line tool. Copy the command, run it in Terminal, then click Check Again."
+                         : "Importing from Plaud needs Plaud's command line tool, which runs on Node.js. Install Node.js, then copy the command, run it in Terminal, and click Check Again.")
                 }
+                // installed while wemmick was open, it's found when this shows again
+                .task { await reloadSettings() }
             }
         }
     }
@@ -488,6 +499,15 @@ struct SettingsView: View {
     }
 
     // follows a sign in until the browser is done with it
+    // the settings again, as after installing the plaud cli, with its account if it's there now
+    private func reloadSettings() async {
+        guard let fresh: SettingsState = try? await API.get(["api", "settings"]) else { return }
+        let found = fresh.plaudInstalled && settings?.plaudInstalled != true
+        settings = fresh
+        store.apply(fresh)
+        if found { await watchPlaud(try? await API.get(["api", "plaud", "account"])) }
+    }
+
     private func watchPlaud(_ account: PlaudAccount?) async {
         plaud = account
         while plaud?.signingIn == true, !Task.isCancelled {

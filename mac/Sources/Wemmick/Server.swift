@@ -40,6 +40,22 @@ final class Server {
     }
 
     static let logURL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/Wemmick.log")
+
+    // where node version managers keep node and what npm installs globally, such as the plaud
+    // cli, which a shell finds through its profile but an app doesn't. the newest node first
+    static var nodeBins: [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        func versions(_ folder: String, bin: String) -> [String] {
+            let dir = home.appending(path: folder)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            return names.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+                .map { dir.appending(path: $0).appending(path: bin).path }
+        }
+        let fixed = [".volta/bin", ".npm-global/bin", ".asdf/shims", ".local/share/mise/shims", ".local/bin"]
+            .map { home.appending(path: $0).path }
+        return (versions(".nvm/versions/node", bin: "bin") + versions(".local/share/fnm/node-versions", bin: "installation/bin") + fixed)
+            .filter { FileManager.default.fileExists(atPath: $0) }
+    }
     var logFile: URL { Self.logURL }
 
     private static let stamp: DateFormatter = {
@@ -94,10 +110,11 @@ final class Server {
         p.arguments = ["app.py"]
         p.currentDirectoryURL = serverDir
         // the app's own ffmpeg and ffprobe come first. apps opened from finder get a bare PATH, so
-        // homebrew's are added after, for swift run, and for the plaud cli
+        // homebrew's are added after, for swift run, then node's, for the plaud cli
         var env = ProcessInfo.processInfo.environment
         let helpers = Bundle.main.executableURL?.deletingLastPathComponent().path ?? ""
-        env["PATH"] = "\(helpers):/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        env["PATH"] = ([helpers, "/opt/homebrew/bin", "/usr/local/bin"] + Self.nodeBins + [env["PATH"] ?? "/usr/bin:/bin"])
+            .joined(separator: ":")
         // each line reaches the log as it's printed, rather than when a buffer fills
         env["PYTHONUNBUFFERED"] = "1"
         // compiled python goes to the caches folder, since writing it inside the app would break its signature
