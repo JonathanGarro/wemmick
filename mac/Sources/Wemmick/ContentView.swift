@@ -418,8 +418,10 @@ struct MeetingList: View {
             }
         }
         // a row added at the top, as a new recording is, keeps the height of a bare row and the
-        // next row draws over it, so the list is built afresh when its meetings change
-        .id(shown.map(\.meetingId))
+        // next row draws over it, so the list is built afresh when its meetings change. it goes
+        // by the section's meetings rather than those shown, since rebuilding while searching
+        // would take the search field's focus after each letter
+        .id((store.section == .inbox ? store.inbox : store.archive).map(\.meetingId))
         // the delete key, or cmd-delete, on the picked meetings
         .onDeleteCommand { deleting = store.picked }
         .deleteMeetings($deleting)
