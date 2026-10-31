@@ -103,9 +103,10 @@ struct MonthChart: View {
         if rows.isEmpty {
             Text("Nothing yet").foregroundStyle(.secondary)
         } else {
-            // label about a dozen months, so the axis stays readable
-            let every = max(1, Int((Double(rows.count) / 12).rounded(.up)))
-            let labelled = rows.enumerated().filter { $0.offset % every == 0 }.map(\.element.label)
+            // a dozen labels at most, on months that divide the year evenly, so with three
+            // months apart they fall on jan, apr, jul and oct whenever the history starts
+            let every = [1, 2, 3, 6, 12].first { rows.count <= $0 * 12 } ?? 12
+            let labelled = rows.map(\.label).filter { Self.month($0).map { ($0 - 1) % every == 0 } ?? false }
             VStack(alignment: .leading, spacing: 6) {
                 readout
                 Chart(rows, id: \.label) { row in
@@ -136,6 +137,13 @@ struct MonthChart: View {
             .font(.callout)
             .foregroundStyle(row == nil ? .tertiary : .secondary)
             .monospacedDigit()
+    }
+
+    // 8 for "2024-08"
+    static func month(_ label: String) -> Int? {
+        let parts = label.split(separator: "-")
+        guard parts.count == 2, let m = Int(parts[1]), (1...12).contains(m) else { return nil }
+        return m
     }
 
     // "2024-08" as "Aug 24" on the axis and "August 2024" in the readout
