@@ -64,6 +64,11 @@ struct WemmickApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             }
+            // there's no help book, so the help menu is for reporting problems
+            CommandGroup(replacing: .help) {
+                Button("Report a Bug...") { BugReport.start() }
+                Button("Show Log in Finder") { BugReport.showLog() }
+            }
             CommandGroup(after: .sidebar) {
                 Button("Refresh") { Task { await store.refresh(); store.revision += 1 } }
                     .keyboardShortcut("r")
