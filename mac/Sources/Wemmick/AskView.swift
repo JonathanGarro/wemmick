@@ -152,6 +152,9 @@ struct ConversationList: View {
                 }
             }
         }
+        // a new conversation's row is first measured as "Naming..." alone, and keeps that height
+        // once its title, date and count arrive, so the list is built afresh when they change
+        .id(chat.conversations.map { "\($0.conversationId) \($0.title ?? "") \($0.updated ?? "") \($0.questions ?? 0)" })
         .overlay {
             if chat.conversations.isEmpty {
                 ContentUnavailableView("No Conversations", systemImage: "bubble.left.and.text.bubble.right",
