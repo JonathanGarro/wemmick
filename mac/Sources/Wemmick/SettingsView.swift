@@ -26,6 +26,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.menuBar) private var showInMenuBar = true
     @AppStorage(Prefs.offerToRecord) private var offerToRecord = true
     @State private var plaud: PlaudAccount?
+    @AppStorage(Prefs.settingsTab) private var tab = SettingsTab.general
 
     var body: some View {
         Group {
@@ -33,6 +34,16 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Settings")
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Settings", selection: $tab) {
+                    ForEach(SettingsTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+        }
         .task {
             settings = try? await API.get(["api", "settings"])
             templates = try? await API.get(["api", "templates"])
@@ -43,317 +54,12 @@ struct SettingsView: View {
 
     private func form(_ s: SettingsState) -> some View {
         Form {
-            SettingsSection("You") {
-                LabeledContent {
-                    TextField("Your name", text: $owner, prompt: Text("Your full name"))
-                        .labelsHidden()
-                        .multilineTextAlignment(.leading)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 240)
-                        .onSubmit { Task { await save(SettingsChange(owner: owner.trimmingCharacters(in: .whitespaces))) } }
-                } label: {
-                    Text("Your name")
-                    Text(s.ownerSource == "env" ? "Notes are written for you, and your to-dos are the ones found. Set by MIC_OWNER in .env until you change it here."
-                         : "Notes are written for you, and your to-dos are the ones found. Press Return to save.")
-                }
-                Picker(selection: Binding(get: { s.micChannel }, set: { channel in
-                    Task { await save(SettingsChange(micChannel: channel)) }
-                })) {
-                    Text("Left").tag("left")
-                    Text("Right").tag("right")
-                } label: {
-                    Text("Your mic channel")
-                    Text("For call recordings with your mic on one side and the call on the other, like Audio Hijack's.")
-                }
-            }
-
-            SettingsSection("Appearance") {
-                LabeledContent {
-                    HStack(spacing: 10) {
-                        ForEach(s.accents, id: \.self) { name in
-                            Button { Task { await save(SettingsChange(accent: name)) } } label: {
-                                Circle()
-                                    .fill(accentTint(name).gradient)
-                                    .frame(width: 20, height: 20)
-                                    .overlay {
-                                        if name == s.accent {
-                                            Circle().fill(.white).frame(width: 7, height: 7)
-                                        }
-                                    }
-                            }
-                            .buttonStyle(.plain)
-                            .help(name.capitalized)
-                            .accessibilityLabel(name.capitalized)
-                        }
-                    }
-                } label: {
-                    Text("Accent color")
-                    Text("Buttons, links, highlights and charts.")
-                }
-            }
-
-            SettingsSection("Recording") {
-                Toggle(isOn: $offerToRecord) {
-                    Text("Offer to record calls")
-                    Text("A notification with a Record button when Zoom, Teams, FaceTime, Slack or a browser starts using the microphone, and one to stop when the call ends.")
-                }
-                Toggle(isOn: $showInMenuBar) {
-                    Text("Show in menu bar")
-                    Text("Start and stop recording a call from the menu bar, with the window closed.")
-                }
-            }
-
-            SettingsSection("To-dos") {
-                Picker(selection: Binding(get: { s.todoApp }, set: { app in
-                    Task { await save(SettingsChange(todoApp: app)) }
-                })) {
-                    Text("None").tag("none")
-                    Text("Things 3").tag("things")
-                    Text("Todoist").tag("todoist")
-                    Text("Reminders").tag("reminders")
-                } label: {
-                    Text("To-do app")
-                    Text(todoAppHint(s))
-                }
-                if s.todoApp == "todoist" {
-                    todoistToken(s)
-                }
-                if s.todoApp == "things" {
-                    thingsAreasRow
-                        .task { await loadThingsAreas() }
-                }
-                Toggle(isOn: $askTodos) {
-                    Text("Ask to find to-dos before sending")
-                    Text("When a note is sent to Obsidian or marked done before its meeting was checked for to-dos.")
-                }
-                .disabled(s.todoApp == "none")
-            }
-
-            SettingsSection("Notes") {
-                Picker(selection: Binding(get: { s.summaryBackend }, set: { backend in
-                    Task { await save(SettingsChange(summaryBackend: backend)) }
-                })) {
-                    Text("A model on this Mac").tag("local")
-                    Text("Claude").tag("claude")
-                } label: {
-                    Text("Write notes with")
-                    Text(s.summaryBackend == "local" ? "Nothing leaves this Mac. A 17 GB download the first time, best with 32 GB of memory or more."
-                         : "Claude reads the transcript text, never the audio, with your API key below.")
-                }
-                Picker(selection: Binding(get: { s.noteTemplate }, set: { name in
-                    Task { await save(SettingsChange(noteTemplate: name)) }
-                })) {
-                    ForEach(templates?.templates ?? [], id: \.name) { t in
-                        Text(t.builtIn ? t.name : "\(t.name) (yours)").tag(t.name)
-                    }
-                } label: {
-                    Text("Template")
-                    Text("The layout new notes are written in. Notes already written keep theirs, and Rewrite Note can switch one.")
-                }
-                HStack {
-                    if let chosen = templates?.templates.first(where: { $0.name == s.noteTemplate }) {
-                        Button(chosen.builtIn ? "View..." : "Edit...") {
-                            editing = TemplateDraft(name: chosen.name, text: chosen.text, builtIn: chosen.builtIn, original: chosen.name)
-                        }
-                        Button("Duplicate...") {
-                            editing = TemplateDraft(name: "\(chosen.name) Copy", text: chosen.text, builtIn: false, original: nil)
-                        }
-                    }
-                    Spacer()
-                }
-            }
-
-            SettingsSection("Obsidian") {
-                folderRow("Meeting notes folder", path: s.meetingNotesDir, source: s.meetingNotesDirSource,
-                          purpose: "Where Send to Obsidian puts notes, and where imported notes are read from. Without one, meetings are marked done instead.") {
-                    SettingsChange(meetingNotesDir: $0)
-                }
-                folderRow("People folder", path: s.peopleDir, source: s.peopleDirSource,
-                          purpose: "One note per person, where their teams and organizations are read and saved.") {
-                    SettingsChange(peopleDir: $0)
-                }
-                folderRow("Project index folder", path: s.projectIndexDir, source: s.projectIndexDirSource,
-                          purpose: "Optional. One note per project, offered when filing a meeting, with active ones first.") {
-                    SettingsChange(projectIndexDir: $0)
-                }
-                Toggle(isOn: $openAfterSend) {
-                    Text("Open notes in Obsidian after sending")
-                    Text("Shows the note in Obsidian as soon as it's sent.")
-                }
-                .disabled(s.meetingNotesDir == nil)
-            }
-
-            SettingsSection("Plaud") {
-                if s.plaudInstalled {
-                    Toggle(isOn: $plaudEnabled) {
-                        Text("Use Plaud")
-                        Text("Import recordings uploaded to Plaud and transcribe them here. Off hides the Plaud page.")
-                    }
-                    plaudAccount
-                        .disabled(!plaudEnabled)
-                } else {
-                    LabeledContent {
-                        Button("Copy Command") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("npm install -g @plaud-ai/cli", forType: .string)
-                        }
-                    } label: {
-                        Text("Plaud CLI not installed")
-                        Text("Importing from Plaud needs its command line tool. Install it with npm install -g @plaud-ai/cli in Terminal, then restart Wemmick.")
-                    }
-                }
-            }
-
-            SettingsSection("Claude") {
-                LabeledContent {
-                    // only ever the masked key, a new one is pasted in rather than shown
-                    Text(s.key.map { "••••" + $0.suffix(3) } ?? "not set")
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                } label: {
-                    Text("Anthropic API key")
-                    Text(keyHint(s))
-                }
-                HStack {
-                    if s.keySource == "env" {
-                        Button("Move to Keychain") { Task { await keyAction { try await API.post(["api", "settings", "key", "move"]) } } }
-                            .buttonStyle(.borderedProminent)
-                            .help("Copy the key into the Keychain and take it out of .env")
-                    }
-                    Button(s.key == nil ? "Add Key..." : "Replace Key...") { enteringKey = true }
-                    if s.key != nil {
-                        Button(checking ? "Checking" : "Check") { Task { await checkKey() } }
-                            .disabled(checking)
-                            .help("Make a free request to Anthropic to see that the key works")
-                    }
-                    if s.keySource == "keychain" {
-                        Button("Remove Key...", role: .destructive) { confirmRemove = true }
-                    }
-                    Spacer()
-                    if let check {
-                        Label(check.ok ? "The key works" : check.error ?? "The key didn't work",
-                              systemImage: check.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                            .foregroundStyle(check.ok ? .green : .red)
-                            .lineLimit(2)
-                    }
-                }
-                Picker(selection: Binding(get: { s.claudeModel }, set: { id in
-                    Task { await save(SettingsChange(claudeModel: id)) }
-                })) {
-                    ForEach(s.models, id: \.id) { Text($0.label).tag($0.id) }
-                } label: {
-                    Text("Model")
-                    Text(modelHint(s))
-                }
-            }
-
-            Section {
-                HStack(spacing: 12) {
-                    tile(money(s.usage.today), "today")
-                    tile(money(s.usage.total), s.usage.since.map { "in total since \($0.prefix(10))" } ?? "in total")
-                    tile("\(Int(s.usage.requests ?? 0))", "requests to Claude")
-                }
-                .padding(.vertical, 4)
-            } header: {
-                Text("Usage")
-            } footer: {
-                Text("Estimated from list prices for the requests this app makes, counted from when usage tracking was added. Anything else using the same key isn't included, and the Anthropic Console has the exact bill.")
-                    .foregroundStyle(.secondary)
-            }
-
-            SettingsSection("Models") {
-                ModelDownloads(tokenReady: s.hfToken != nil || s.modelReady)
-                LabeledContent {
-                    Text(s.hfToken.map { "••••" + $0.suffix(3) } ?? "not set")
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                } label: {
-                    Text("Hugging Face token")
-                    Text(s.modelReady ? "The model is downloaded, so the token isn't needed any more."
-                         : "Needed once, to download the speaker detection model, after accepting its terms on Hugging Face.")
-                }
-                HStack {
-                    Button(s.hfToken == nil ? "Add Token..." : "Replace Token...") { enteringHFToken = true }
-                    if s.hfToken != nil {
-                        Button("Check") { Task { hfCheck = try? await API.post(["api", "settings", "hf", "check"]) } }
-                    }
-                    if !s.modelReady, let url = URL(string: s.hfTermsUrl) {
-                        Link("Accept the Terms", destination: url)
-                    }
-                    Spacer()
-                    if let hfCheck {
-                        Label(hfCheck.ok ? "The token works" : hfCheck.error ?? "The token didn't work",
-                              systemImage: hfCheck.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                            .foregroundStyle(hfCheck.ok ? .green : .red)
-                            .lineLimit(2)
-                    }
-                }
-            }
-
-            SettingsSection("About") {
-                HStack {
-                    Button("Run Setup Again...") { store.showSetup = true }
-                        .help("Go through setup again, starting from what's set now")
-                    Button("Reset Setup...", role: .destructive) { confirmReset = true }
-                        .help("Forget what setup asked for, and show it whenever Wemmick opens until it's finished")
-                }
-                if let current = store.updates.current {
-                    Toggle(isOn: Binding(get: { store.updates.automaticChecks }, set: { store.updates.setAutomaticChecks($0) })) {
-                        Text("Check for updates")
-                        Text("Asks GitHub once a day whether there's a newer release. Nothing about you or your meetings is sent.")
-                    }
-                    Toggle(isOn: Binding(get: { store.updates.automaticInstalls }, set: { store.updates.setAutomaticInstalls($0) })) {
-                        Text("Install updates automatically")
-                        Text("Downloads them in the background and installs them when you quit Wemmick.")
-                    }
-                    .disabled(!store.updates.automaticChecks)
-                    LabeledContent {
-                        Button("Check Now") { store.updates.check() }
-                    } label: {
-                        Text("Version \(current)")
-                        if let version = store.updates.available {
-                            Text("Wemmick \(version) is out. Update from the link under the sidebar.")
-                        }
-                    }
-                }
-                LabeledContent {
-                    Button(s.libraryDir) { NSWorkspace.shared.open(URL(fileURLWithPath: s.libraryDir)) }
-                        .buttonStyle(.link)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                } label: {
-                    Text("Library folder")
-                    Text("Recordings, meetings, settings and templates. WEMMICK_HOME in .env can move it.")
-                }
-                LabeledContent("Server code") {
-                    Button(Server.shared.serverDir.path) { NSWorkspace.shared.activateFileViewerSelecting([Server.shared.serverDir]) }
-                        .buttonStyle(.link)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                LabeledContent("Server", value: Server.shared.baseURL.absoluteString)
-                if let licenses = Bundle.main.resourceURL?.appending(path: "licenses"),
-                   FileManager.default.fileExists(atPath: licenses.path) {
-                    LabeledContent {
-                        Button("Show Licenses") { NSWorkspace.shared.open(licenses) }
-                    } label: {
-                        Text("Licenses")
-                        Text("Wemmick is MIT licensed. It includes ffmpeg, under the LGPL 2.1, and uv, under MIT or Apache 2.0.")
-                    }
-                }
-                LabeledContent {
-                    Button("Copy Diagnostics") { Task { await copyDiagnostics() } }
-                } label: {
-                    Text("Reporting a problem")
-                    Text("Copies the app and macOS versions, what's set up and the end of the log. No keys, names or transcripts, though log lines can name meetings.")
-                }
-                LabeledContent("Log") {
-                    Button(Server.shared.logFile.lastPathComponent) {
-                        NSWorkspace.shared.activateFileViewerSelecting([Server.shared.logFile])
-                    }
-                    .buttonStyle(.link)
-                    .help(Server.shared.logFile.path)
-                }
+            switch tab {
+            case .general: general(s)
+            case .notes: notesTab(s)
+            case .integrations: integrations(s)
+            case .models: models(s)
+            case .about: about(s)
             }
         }
         .formStyle(.grouped)
@@ -405,6 +111,339 @@ struct SettingsView: View {
             Button("Remove Key", role: .destructive) { Task { await keyAction { try await API.delete(["api", "settings", "key"]) } } }
         } message: {
             Text("It's deleted from the Keychain, and Ask and Claude notes stop working until you add one again.")
+        }
+    }
+
+    // your name and mic, the accent color, and recording calls
+    @ViewBuilder
+    private func general(_ s: SettingsState) -> some View {
+        SettingsSection("You") {
+            LabeledContent {
+                TextField("Your name", text: $owner, prompt: Text("Your full name"))
+                    .labelsHidden()
+                    .multilineTextAlignment(.leading)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 240)
+                    .onSubmit { Task { await save(SettingsChange(owner: owner.trimmingCharacters(in: .whitespaces))) } }
+            } label: {
+                Text("Your name")
+                Text(s.ownerSource == "env" ? "Notes are written for you, and your to-dos are the ones found. Set by MIC_OWNER in .env until you change it here."
+                     : "Notes are written for you, and your to-dos are the ones found. Press Return to save.")
+            }
+            Picker(selection: Binding(get: { s.micChannel }, set: { channel in
+                Task { await save(SettingsChange(micChannel: channel)) }
+            })) {
+                Text("Left").tag("left")
+                Text("Right").tag("right")
+            } label: {
+                Text("Your mic channel")
+                Text("For call recordings with your mic on one side and the call on the other, like Audio Hijack's.")
+            }
+        }
+
+        SettingsSection("Appearance") {
+            LabeledContent {
+                HStack(spacing: 10) {
+                    ForEach(s.accents, id: \.self) { name in
+                        Button { Task { await save(SettingsChange(accent: name)) } } label: {
+                            Circle()
+                                .fill(accentTint(name).gradient)
+                                .frame(width: 20, height: 20)
+                                .overlay {
+                                    if name == s.accent {
+                                        Circle().fill(.white).frame(width: 7, height: 7)
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .help(name.capitalized)
+                        .accessibilityLabel(name.capitalized)
+                    }
+                }
+            } label: {
+                Text("Accent color")
+                Text("Buttons, links, highlights and charts.")
+            }
+        }
+
+        SettingsSection("Recording") {
+            Toggle(isOn: $offerToRecord) {
+                Text("Offer to record calls")
+                Text("A notification with a Record button when Zoom, Teams, FaceTime, Slack or a browser starts using the microphone, and one to stop when the call ends.")
+            }
+            Toggle(isOn: $showInMenuBar) {
+                Text("Show in menu bar")
+                Text("Start and stop recording a call from the menu bar, with the window closed.")
+            }
+        }
+    }
+
+    // how notes are written, and the claude key and model they can be written with
+    @ViewBuilder
+    private func notesTab(_ s: SettingsState) -> some View {
+        SettingsSection("Notes") {
+            Picker(selection: Binding(get: { s.summaryBackend }, set: { backend in
+                Task { await save(SettingsChange(summaryBackend: backend)) }
+            })) {
+                Text("A model on this Mac").tag("local")
+                Text("Claude").tag("claude")
+            } label: {
+                Text("Write notes with")
+                Text(s.summaryBackend == "local" ? "Nothing leaves this Mac. A 17 GB download the first time, best with 32 GB of memory or more."
+                     : "Claude reads the transcript text, never the audio, with your API key below.")
+            }
+            Picker(selection: Binding(get: { s.noteTemplate }, set: { name in
+                Task { await save(SettingsChange(noteTemplate: name)) }
+            })) {
+                ForEach(templates?.templates ?? [], id: \.name) { t in
+                    Text(t.builtIn ? t.name : "\(t.name) (yours)").tag(t.name)
+                }
+            } label: {
+                Text("Template")
+                Text("The layout new notes are written in. Notes already written keep theirs, and Rewrite Note can switch one.")
+            }
+            HStack {
+                if let chosen = templates?.templates.first(where: { $0.name == s.noteTemplate }) {
+                    Button(chosen.builtIn ? "View..." : "Edit...") {
+                        editing = TemplateDraft(name: chosen.name, text: chosen.text, builtIn: chosen.builtIn, original: chosen.name)
+                    }
+                    Button("Duplicate...") {
+                        editing = TemplateDraft(name: "\(chosen.name) Copy", text: chosen.text, builtIn: false, original: nil)
+                    }
+                }
+                Spacer()
+            }
+        }
+
+        SettingsSection("Claude") {
+            LabeledContent {
+                // only ever the masked key, a new one is pasted in rather than shown
+                Text(s.key.map { "••••" + $0.suffix(3) } ?? "not set")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } label: {
+                Text("Anthropic API key")
+                Text(keyHint(s))
+            }
+            HStack {
+                if s.keySource == "env" {
+                    Button("Move to Keychain") { Task { await keyAction { try await API.post(["api", "settings", "key", "move"]) } } }
+                        .buttonStyle(.borderedProminent)
+                        .help("Copy the key into the Keychain and take it out of .env")
+                }
+                Button(s.key == nil ? "Add Key..." : "Replace Key...") { enteringKey = true }
+                if s.key != nil {
+                    Button(checking ? "Checking" : "Check") { Task { await checkKey() } }
+                        .disabled(checking)
+                        .help("Make a free request to Anthropic to see that the key works")
+                }
+                if s.keySource == "keychain" {
+                    Button("Remove Key...", role: .destructive) { confirmRemove = true }
+                }
+                Spacer()
+                if let check {
+                    Label(check.ok ? "The key works" : check.error ?? "The key didn't work",
+                          systemImage: check.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                        .foregroundStyle(check.ok ? .green : .red)
+                        .lineLimit(2)
+                }
+            }
+            Picker(selection: Binding(get: { s.claudeModel }, set: { id in
+                Task { await save(SettingsChange(claudeModel: id)) }
+            })) {
+                ForEach(s.models, id: \.id) { Text($0.label).tag($0.id) }
+            } label: {
+                Text("Model")
+                Text(modelHint(s))
+            }
+        }
+
+        Section {
+            HStack(spacing: 12) {
+                tile(money(s.usage.today), "today")
+                tile(money(s.usage.total), s.usage.since.map { "in total since \($0.prefix(10))" } ?? "in total")
+                tile("\(Int(s.usage.requests ?? 0))", "requests to Claude")
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Usage")
+        } footer: {
+            Text("Estimated from list prices for the requests this app makes, counted from when usage tracking was added. Anything else using the same key isn't included, and the Anthropic Console has the exact bill.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // where to-dos and notes go, and plaud
+    @ViewBuilder
+    private func integrations(_ s: SettingsState) -> some View {
+        SettingsSection("To-dos") {
+            Picker(selection: Binding(get: { s.todoApp }, set: { app in
+                Task { await save(SettingsChange(todoApp: app)) }
+            })) {
+                Text("None").tag("none")
+                Text("Things 3").tag("things")
+                Text("Todoist").tag("todoist")
+                Text("Reminders").tag("reminders")
+            } label: {
+                Text("To-do app")
+                Text(todoAppHint(s))
+            }
+            if s.todoApp == "todoist" {
+                todoistToken(s)
+            }
+            if s.todoApp == "things" {
+                thingsAreasRow
+                    .task { await loadThingsAreas() }
+            }
+            Toggle(isOn: $askTodos) {
+                Text("Ask to find to-dos before sending")
+                Text("When a note is sent to Obsidian or marked done before its meeting was checked for to-dos.")
+            }
+            .disabled(s.todoApp == "none")
+        }
+
+        SettingsSection("Obsidian") {
+            folderRow("Meeting notes folder", path: s.meetingNotesDir, source: s.meetingNotesDirSource,
+                      purpose: "Where Send to Obsidian puts notes, and where imported notes are read from. Without one, meetings are marked done instead.") {
+                SettingsChange(meetingNotesDir: $0)
+            }
+            folderRow("People folder", path: s.peopleDir, source: s.peopleDirSource,
+                      purpose: "One note per person, where their teams and organizations are read and saved.") {
+                SettingsChange(peopleDir: $0)
+            }
+            folderRow("Project index folder", path: s.projectIndexDir, source: s.projectIndexDirSource,
+                      purpose: "Optional. One note per project, offered when filing a meeting, with active ones first.") {
+                SettingsChange(projectIndexDir: $0)
+            }
+            Toggle(isOn: $openAfterSend) {
+                Text("Open notes in Obsidian after sending")
+                Text("Shows the note in Obsidian as soon as it's sent.")
+            }
+            .disabled(s.meetingNotesDir == nil)
+        }
+
+        SettingsSection("Plaud") {
+            if s.plaudInstalled {
+                Toggle(isOn: $plaudEnabled) {
+                    Text("Use Plaud")
+                    Text("Import recordings uploaded to Plaud and transcribe them here. Off hides the Plaud page.")
+                }
+                plaudAccount
+                    .disabled(!plaudEnabled)
+            } else {
+                LabeledContent {
+                    Button("Copy Command") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString("npm install -g @plaud-ai/cli", forType: .string)
+                    }
+                } label: {
+                    Text("Plaud CLI not installed")
+                    Text("Importing from Plaud needs its command line tool. Install it with npm install -g @plaud-ai/cli in Terminal, then restart Wemmick.")
+                }
+            }
+        }
+    }
+
+    // the transcription and speaker models, and the token one needs
+    @ViewBuilder
+    private func models(_ s: SettingsState) -> some View {
+        SettingsSection("Models") {
+            ModelDownloads(tokenReady: s.hfToken != nil || s.modelReady)
+            LabeledContent {
+                Text(s.hfToken.map { "••••" + $0.suffix(3) } ?? "not set")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } label: {
+                Text("Hugging Face token")
+                Text(s.modelReady ? "The model is downloaded, so the token isn't needed any more."
+                     : "Needed once, to download the speaker detection model, after accepting its terms on Hugging Face.")
+            }
+            HStack {
+                Button(s.hfToken == nil ? "Add Token..." : "Replace Token...") { enteringHFToken = true }
+                if s.hfToken != nil {
+                    Button("Check") { Task { hfCheck = try? await API.post(["api", "settings", "hf", "check"]) } }
+                }
+                if !s.modelReady, let url = URL(string: s.hfTermsUrl) {
+                    Link("Accept the Terms", destination: url)
+                }
+                Spacer()
+                if let hfCheck {
+                    Label(hfCheck.ok ? "The token works" : hfCheck.error ?? "The token didn't work",
+                          systemImage: hfCheck.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                        .foregroundStyle(hfCheck.ok ? .green : .red)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    // setup, updates, where things are, and reporting a problem
+    @ViewBuilder
+    private func about(_ s: SettingsState) -> some View {
+        SettingsSection("About") {
+            HStack {
+                Button("Run Setup Again...") { store.showSetup = true }
+                    .help("Go through setup again, starting from what's set now")
+                Button("Reset Setup...", role: .destructive) { confirmReset = true }
+                    .help("Forget what setup asked for, and show it whenever Wemmick opens until it's finished")
+            }
+            if let current = store.updates.current {
+                Toggle(isOn: Binding(get: { store.updates.automaticChecks }, set: { store.updates.setAutomaticChecks($0) })) {
+                    Text("Check for updates")
+                    Text("Asks GitHub once a day whether there's a newer release. Nothing about you or your meetings is sent.")
+                }
+                Toggle(isOn: Binding(get: { store.updates.automaticInstalls }, set: { store.updates.setAutomaticInstalls($0) })) {
+                    Text("Install updates automatically")
+                    Text("Downloads them in the background and installs them when you quit Wemmick.")
+                }
+                .disabled(!store.updates.automaticChecks)
+                LabeledContent {
+                    Button("Check Now") { store.updates.check() }
+                } label: {
+                    Text("Version \(current)")
+                    if let version = store.updates.available {
+                        Text("Wemmick \(version) is out. Update from the link under the sidebar.")
+                    }
+                }
+            }
+            LabeledContent {
+                Button(s.libraryDir) { NSWorkspace.shared.open(URL(fileURLWithPath: s.libraryDir)) }
+                    .buttonStyle(.link)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } label: {
+                Text("Library folder")
+                Text("Recordings, meetings, settings and templates. WEMMICK_HOME in .env can move it.")
+            }
+            LabeledContent("Server code") {
+                Button(Server.shared.serverDir.path) { NSWorkspace.shared.activateFileViewerSelecting([Server.shared.serverDir]) }
+                    .buttonStyle(.link)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            LabeledContent("Server", value: Server.shared.baseURL.absoluteString)
+            if let licenses = Bundle.main.resourceURL?.appending(path: "licenses"),
+               FileManager.default.fileExists(atPath: licenses.path) {
+                LabeledContent {
+                    Button("Show Licenses") { NSWorkspace.shared.open(licenses) }
+                } label: {
+                    Text("Licenses")
+                    Text("Wemmick is MIT licensed. It includes ffmpeg, under the LGPL 2.1, and uv, under MIT or Apache 2.0.")
+                }
+            }
+            LabeledContent {
+                Button("Report a Bug...") { BugReport.start() }
+            } label: {
+                Text("Reporting a problem")
+                Text("Saves a copy of the log with what's set up, and opens a new issue on GitHub to attach it to. No keys or transcripts, though log lines name meetings.")
+            }
+            LabeledContent("Log") {
+                Button(Server.shared.logFile.lastPathComponent) {
+                    NSWorkspace.shared.activateFileViewerSelecting([Server.shared.logFile])
+                }
+                .buttonStyle(.link)
+                .help(Server.shared.logFile.path)
+            }
         }
     }
 
@@ -499,19 +538,6 @@ struct SettingsView: View {
             owner = updated.owner ?? ""
             store.apply(updated)
             store.showSetup = true
-        } catch {
-            store.show(error.localizedDescription)
-        }
-    }
-
-    private func copyDiagnostics() async {
-        do {
-            let text = String(decoding: try await API.data(["api", "diagnostics"]), as: UTF8.self)
-            let info = Bundle.main.infoDictionary
-            let version = "Wemmick \(info?["CFBundleShortVersionString"] as? String ?? "development") (\(info?["CFBundleVersion"] as? String ?? "swift run"))"
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(version + "\n" + text, forType: .string)
-            store.show("Copied diagnostics")
         } catch {
             store.show(error.localizedDescription)
         }
@@ -679,6 +705,15 @@ struct SettingsView: View {
 // pastes a new key in a password field, so it is never shown
 // a section of settings. its header is set bold here, since the font set on the form would
 // otherwise make it plain
+// the settings page's tabs
+enum SettingsTab: String, CaseIterable {
+    case general = "General"
+    case notes = "Notes"
+    case integrations = "Integrations"
+    case models = "Models"
+    case about = "About"
+}
+
 struct SettingsSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content

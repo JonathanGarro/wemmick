@@ -22,14 +22,25 @@ enum BugReport {
         alert.addButton(withTitle: "Save Log and Open GitHub")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            let file = try saveLog()
-            NSWorkspace.shared.activateFileViewerSelecting([file])
-            NSWorkspace.shared.open(issue(log: file.lastPathComponent))
-        } catch {
-            let failed = NSAlert(error: error)
-            failed.runModal()
+        Task {
+            do {
+                let file = try saveLog(setup: await setup())
+                NSWorkspace.shared.activateFileViewerSelecting([file])
+                NSWorkspace.shared.open(issue(log: file.lastPathComponent))
+            } catch {
+                let failed = NSAlert(error: error)
+                failed.runModal()
+            }
         }
+    }
+
+    // what's set up, from the server, as yes or no rather than names or keys. its own copy of
+    // the log's end is left off, since the whole recent log follows. empty when the server
+    // isn't running
+    private static func setup() async -> String {
+        guard let data = try? await API.data(["api", "diagnostics"]) else { return "" }
+        let text = String(decoding: data, as: UTF8.self)
+        return text.components(separatedBy: "\nlog:").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     static func showLog() {
@@ -54,7 +65,7 @@ enum BugReport {
         return String(cString: name)
     }
 
-    private static func saveLog() throws -> URL {
+    private static func saveLog(setup: String) throws -> URL {
         let handle = try FileHandle(forReadingFrom: Server.logURL)
         defer { try? handle.close() }
         let size = try handle.seekToEnd()
@@ -68,7 +79,7 @@ enum BugReport {
                                                timeZone: .current, calendar: .current))
         // beside the log rather than on the desktop, which would need a permission
         let file = Server.logURL.deletingLastPathComponent().appending(path: "Wemmick log \(stamp).txt")
-        try "\(about)\n\n\(text)".write(to: file, atomically: true, encoding: .utf8)
+        try ([about, setup, "log:", text].filter { !$0.isEmpty }.joined(separator: "\n\n")).write(to: file, atomically: true, encoding: .utf8)
         return file
     }
 

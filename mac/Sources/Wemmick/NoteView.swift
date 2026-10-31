@@ -630,6 +630,8 @@ enum Prefs {
     static let offerToRecord = "offerToRecordCalls"
     // checking for updates was switched off, from before sparkle, which keeps its own setting
     static let checkUpdates = "checkForUpdates"
+    // the settings tab last shown
+    static let settingsTab = "settingsTab"
 }
 
 enum NoteMode: String {
