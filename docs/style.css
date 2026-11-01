@@ -86,6 +86,7 @@ section { padding: 0 24px; }
   background: var(--text); color: var(--bg); font-weight: 600; font-size: 16px;
 }
 a.pill { transition: transform .15s, opacity .15s; }
+.pill .version { display: block; margin-top: 2px; font-size: 12px; font-weight: 500; opacity: .65; }
 a.pill:hover { transform: translateY(-1px); opacity: .9; }
 .fine { font-size: 13px; color: var(--faint); }
 

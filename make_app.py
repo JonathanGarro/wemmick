@@ -33,6 +33,7 @@ import json
 import tomllib
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -234,6 +235,14 @@ def sign_sparkle(framework, identity, release):
     sign(framework, identity, release)
 
 
+def write_site_version():
+    """the version under the site's download buttons, committed with the release."""
+    page = BASE_DIR / "docs" / "index.html"
+    page.write_text(re.sub(r'(<span class="version">Version )[^<]*(</span>)', rf"\g<1>{version()[0]}\g<2>",
+                           page.read_text()))
+    return page
+
+
 def write_appcast(dmg):
     """the feed sparkle reads, naming the dmg on this version's release and its signature."""
     project, build = version()
@@ -397,8 +406,10 @@ def main():
     if args.release:
         dmg = make_release(app_dir, identity)
         feed = write_appcast(dmg)
+        page = write_site_version()
         print(f"built {dmg}, notarized and ready to share, and {feed}. Release them with:")
         print(f"  gh release create v{version()[0]} {dmg} {feed}")
+        print(f"then commit and push {page.relative_to(BASE_DIR)}, which shows the new version")
         return
     # tell finder and the dock to pick up the new icon, and launch services the link type
     subprocess.run(["touch", str(app_dir)], check=False)
