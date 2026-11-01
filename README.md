@@ -2,7 +2,7 @@
 
 Wemmick is offline meeting transcription with speaker diarization and voice profile matching, built for Apple Silicon. Audio, transcripts, and voice profiles never leave the machine.
 
-It needs a Mac with Apple Silicon and macOS 26 or later, about 16 GB of memory (32 GB or more for writing notes with the local model), and around 5 GB of disk for Python, its packages and the models, plus the recordings.
+It needs a Mac with Apple Silicon and macOS 26 or later, about 16 GB of memory (notes written on the Mac use a 17 GB model with 32 GB or more, and a 2.3 GB one below that), and around 5 GB of disk for Python, its packages and the models, plus the recordings.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
@@ -228,7 +228,7 @@ Two backends, chosen in Settings, per note in the write form, or with `SUMMARY_B
 
 | | local (default) | claude |
 |---|---|---|
-| Model | Qwen3-30B-A3B Instruct, 4-bit MLX (17 GB download) | `claude-opus-5-5`, override with `CLAUDE_MODEL` |
+| Model | Qwen3-30B-A3B Instruct, 4-bit MLX (17 GB download) on 32 GB Macs, Qwen3-4B Instruct (2.3 GB) below that, chosen in Settings under Notes | `claude-opus-5-5`, override with `CLAUDE_MODEL` |
 | Data | nothing leaves the Mac | transcript text goes to the Anthropic API, never audio or voice profiles |
 | Needs | the model in the Hugging Face cache | an Anthropic API key (see below) |
 

@@ -290,6 +290,8 @@ class SettingsRequest(BaseModel):
     owner: str | None = None
     mic_channel: str | None = None
     summary_backend: str | None = None
+    # "large" or "small"
+    local_model: str | None = None
     setup_done: bool | None = None
     # an empty list reads projects from every things area
     things_areas: list[str] | None = None
@@ -414,7 +416,10 @@ def create_app():
                 **folder_state(), "owner": settings.owner(),
                 "owner_source": "settings" if settings.load()["owner"] else "env" if settings.owner() else None,
                 "mic_channel": settings.mic_channel(), "summary_backend": settings.summary_backend(),
-                "setup_needed": settings.setup_needed(), "people": sorted(set(library.person_names().values())),
+                "local_model": settings.local_model(),
+                "local_models": [{"id": k, **{f: v[f] for f in ("label", "detail", "memory_gb")}}
+                                 for k, v in settings.LOCAL_MODELS.items()],
+                "memory_gb": round(settings.memory_gb()), "setup_needed": settings.setup_needed(), "people": sorted(set(library.person_names().values())),
                 "hf_token": hf.masked_token(), "hf_source": hf.token_source(), "model_ready": hf.model_ready(),
                 "hf_terms_url": hf.TERMS_URL, "library_dir": str(paths.HOME)}
 
@@ -502,7 +507,8 @@ def create_app():
         rows = [
             f"macOS {platform.mac_ver()[0]}, {sysctl('machdep.cpu.brand_string')}, {memory:.0f} GB memory",
             f"python {platform.python_version()}, server code in {paths.PROJECT_DIR}, library in {paths.HOME}",
-            f"name set: {'yes' if settings.owner() else 'no'}, notes with: {settings.summary_backend()}, "
+            f"name set: {'yes' if settings.owner() else 'no'}, notes with: {settings.summary_backend()} "
+            f"({settings.local_model()} local model), "
             f"template: {saved['note_template']}, to-do app: {saved['todo_app']}",
             f"anthropic key: {keychain.source() or 'none'}, hugging face token: {hf.token_source() or 'none'}, "
             f"todoist token: {todoist.token_source() or 'none'}",
@@ -587,7 +593,7 @@ def create_app():
                           people_dir=request.people_dir, project_index_dir=request.project_index_dir,
                           note_template=request.note_template, owner=request.owner,
                           mic_channel=request.mic_channel, summary_backend=request.summary_backend,
-                          setup_done=request.setup_done, things_areas=request.things_areas)
+                          local_model=request.local_model, setup_done=request.setup_done, things_areas=request.things_areas)
             if request.things_areas is not None:
                 # the project menu follows a new choice of areas at once
                 things.clear_cache()

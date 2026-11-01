@@ -189,8 +189,24 @@ struct SettingsView: View {
                 Text("Claude").tag("claude")
             } label: {
                 Text("Write notes with")
-                Text(s.summaryBackend == "local" ? "Nothing leaves this Mac. A 17 GB download the first time, best with 32 GB of memory or more."
+                Text(s.summaryBackend == "local" ? "Nothing leaves this Mac."
                      : "Claude reads the transcript text, never the audio, with your API key below.")
+            }
+            if s.summaryBackend == "local", let models = s.localModels, let chosen = s.localModel {
+                Picker(selection: Binding(get: { chosen }, set: { model in
+                    Task { await save(SettingsChange(localModel: model)) }
+                })) {
+                    ForEach(models, id: \.id) { Text($0.label).tag($0.id) }
+                } label: {
+                    Text("Model")
+                    Text(models.first { $0.id == chosen }?.detail ?? "")
+                }
+                if let model = models.first(where: { $0.id == chosen }), let memory = s.memoryGb, memory < model.memoryGb - 1 {
+                    Label("This Mac has \(Int(memory)) GB of memory, too little for the \(model.label.lowercased()) model, so notes won't be written. Choose another model or Claude.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             Picker(selection: Binding(get: { s.noteTemplate }, set: { name in
                 Task { await save(SettingsChange(noteTemplate: name)) }

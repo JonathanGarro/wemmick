@@ -43,7 +43,8 @@ struct SetupView: View {
         .task {
             settings = try? await API.get(["api", "settings"])
             name = settings?.owner ?? ""
-            backend = settings?.summaryBackend ?? "local"
+            // a mac too small for the large model starts on claude, whose notes are better than the small model's
+            backend = settings?.setupNeeded == true && settings?.localModel == "small" ? "claude" : settings?.summaryBackend ?? "local"
         }
     }
 
@@ -118,7 +119,9 @@ struct SetupView: View {
             .pickerStyle(.radioGroup)
             .labelsHidden()
             Text(backend == "local"
-                 ? "Nothing leaves this Mac. The model is a 17 GB download the first time, and it works best with 32 GB of memory or more."
+                 ? s.localModel == "small"
+                    ? "Nothing leaves this Mac. With \(Int(s.memoryGb ?? 16)) GB of memory, it uses a small model, a 2.3 GB download the first time. Its notes are simpler than Claude's."
+                    : "Nothing leaves this Mac. The model is a 17 GB download the first time, and it works best with 32 GB of memory or more."
                  : "Claude writes better notes, and Ask and finding to-dos use it too. It reads the transcript text, never the audio, with your Anthropic API key.")
                 .foregroundStyle(.secondary)
                 .padding(.top, 6)

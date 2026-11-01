@@ -20,8 +20,19 @@ THINGS_APP = Path("/Applications/Things3.app")
 MIC_CHANNELS = ["left", "right"]
 # what writes notes: an mlx model on this mac, or claude
 SUMMARY_BACKENDS = ["local", "claude"]
+# the models that can write notes on this mac. the large one's weights are 17 GB, so it
+# needs a 32 GB mac. the small one fits a 16 GB mac, or an 8 GB one with little else open.
+# bytes are the download, which is about what loading takes
+LOCAL_MODELS = {
+    "large": {"repo": "mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit", "label": "Large",
+              "detail": "Qwen3 30B, a 17 GB download, for 32 GB of memory or more", "bytes": 17_200_000_000,
+              "memory_gb": 32},
+    "small": {"repo": "mlx-community/Qwen3-4B-Instruct-2507-4bit", "label": "Small",
+              "detail": "Qwen3 4B, a 2.3 GB download, for 16 GB of memory", "bytes": 2_280_000_000,
+              "memory_gb": 8},
+}
 # what setup asks for, which resetting it forgets
-SETUP_KEYS = ["owner", "summary_backend", "mic_channel", "meeting_notes_dir", "people_dir", "project_index_dir",
+SETUP_KEYS = ["owner", "summary_backend", "local_model", "mic_channel", "meeting_notes_dir", "people_dir", "project_index_dir",
               "todo_app", "note_template", "things_areas"]
 # obsidian folders chosen on the settings page, which win over the same names in .env
 FOLDERS = {"meeting_notes_dir": "MEETING_NOTES_DIR", "people_dir": "PEOPLE_DIR", "project_index_dir": "PROJECT_INDEX_DIR"}
@@ -63,6 +74,7 @@ def load():
             "mic_channel": saved.get("mic_channel") if saved.get("mic_channel") in MIC_CHANNELS else None,
             "summary_backend": saved.get("summary_backend") if saved.get("summary_backend") in SUMMARY_BACKENDS
             else None,
+            "local_model": saved.get("local_model") if saved.get("local_model") in LOCAL_MODELS else None,
             "setup_done": bool(saved.get("setup_done")),
             "setup_reset": bool(saved.get("setup_reset")),
             # things areas to read projects from. an empty list is every area, None falls back to .env
@@ -81,6 +93,8 @@ def save(**changes):
         raise ValueError(f"the mic channel must be one of {', '.join(MIC_CHANNELS)}")
     if changes.get("summary_backend") and changes["summary_backend"] not in SUMMARY_BACKENDS:
         raise ValueError(f"notes are written by one of {', '.join(SUMMARY_BACKENDS)}")
+    if changes.get("local_model") and changes["local_model"] not in LOCAL_MODELS:
+        raise ValueError(f"the local model must be one of {', '.join(LOCAL_MODELS)}")
     if changes.get("things_areas") is not None:
         changes["things_areas"] = [str(a).strip() for a in changes["things_areas"] if str(a).strip()]
     if changes.get("owner") is not None:
@@ -128,6 +142,19 @@ def summary_backend():
     """what writes notes, from settings, else SUMMARY_BACKEND in .env, else the local model."""
     found = load()["summary_backend"] or os.environ.get("SUMMARY_BACKEND", "").strip()
     return found if found in SUMMARY_BACKENDS else "local"
+
+
+def memory_gb():
+    """this mac's memory, in GB."""
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 30
+
+
+def local_model():
+    """"large" or "small", from settings, else whichever fits this mac's memory."""
+    chosen = load()["local_model"]
+    if chosen:
+        return chosen
+    return "large" if memory_gb() >= LOCAL_MODELS["large"]["memory_gb"] - 1 else "small"
 
 
 def setup_needed():

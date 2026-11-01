@@ -263,6 +263,16 @@ struct ClaudeModel: Codable, Hashable {
     let output: Double
 }
 
+// a model that writes notes on this mac
+struct LocalModel: Codable, Hashable {
+    // "large" or "small"
+    let id: String
+    let label: String
+    let detail: String
+    // the memory it needs
+    let memoryGb: Double
+}
+
 struct Usage: Codable {
     let total: Double?
     let requests: Double?
@@ -304,6 +314,11 @@ struct SettingsState: Codable {
     let micChannel: String
     // "local" or "claude"
     let summaryBackend: String
+    // which local model writes notes, the models there are, and this mac's memory in GB.
+    // nil from an older server
+    let localModel: String?
+    let localModels: [LocalModel]?
+    let memoryGb: Double?
     // no name anywhere and setup not finished, so it's shown when the app opens
     let setupNeeded: Bool
     let people: [String]
@@ -378,6 +393,7 @@ struct SettingsChange: Encodable {
     var owner: String?
     var micChannel: String?
     var summaryBackend: String?
+    var localModel: String?
     var setupDone: Bool?
 }
 

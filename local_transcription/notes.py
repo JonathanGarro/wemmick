@@ -21,7 +21,11 @@ from local_transcription import keychain, library, settings, templates, todos
 
 # config
 BACKENDS = ["local", "claude"]
-DEFAULT_LOCAL_MODEL = "mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit"
+# a local model can use this much of the mac's memory. past it, the mac swaps so hard that a
+# note takes ages and everything else stalls, or mlx runs out of memory partway through
+MEMORY_SHARE = 0.75
+# what a model takes beyond its weights, for the transcript and the reply
+WORKING_BYTES = 2 * 2 ** 30
 MAX_OUTPUT_TOKENS = 4000
 LOCAL_TEMPERATURE = 0.2
 # how alike a transcript word and a word of a vocabulary term are for the term to go in the
@@ -47,8 +51,24 @@ SHAPES = {
 
 # helpers
 def _models():
-    return {"local_model": os.environ.get("LOCAL_SUMMARY_MODEL", DEFAULT_LOCAL_MODEL),
+    return {"local_model": os.environ.get("LOCAL_SUMMARY_MODEL")
+            or settings.LOCAL_MODELS[settings.local_model()]["repo"],
             "claude_model": settings.claude_model()}
+
+
+def check_memory(model_name):
+    """stop before loading a model too big for this mac, with what to do instead. a model set
+    in .env is measured by what's downloaded of it, and passes if none is yet."""
+    from local_transcription import hf
+
+    known = next((m for m in settings.LOCAL_MODELS.values() if m["repo"] == model_name), None)
+    weights = known["bytes"] if known else hf._blob_bytes(model_name)
+    memory = settings.memory_gb()
+    if not weights or weights * 1.15 + WORKING_BYTES <= memory * 2 ** 30 * MEMORY_SHARE:
+        return
+    needs = known["memory_gb"] if known else round((weights * 1.15 + WORKING_BYTES) / 2 ** 30 / MEMORY_SHARE)
+    raise RuntimeError(f"This Mac has {memory:.0f} GB of memory, and {model_name.split('/')[-1]} needs about "
+                       f"{needs} GB. Choose the small model or Claude in Settings, under Notes")
 
 
 def default_backend():
@@ -81,11 +101,19 @@ def parse_json(text):
     return json.loads(text[start:end + 1])
 
 
+def _items(value):
+    """a list the model was asked for. small models sometimes write it as one string of
+    sentences, which become the items."""
+    if isinstance(value, list):
+        return value
+    return re.split(r"(?<=[.!?])\s+(?=[A-Z])", value.strip()) if isinstance(value, str) and value.strip() else []
+
+
 def _topics(value):
     topics = []
     for topic in value if isinstance(value, list) else []:
         if isinstance(topic, dict):
-            points = [_plain(p) for p in topic.get("points") or [] if _plain(p)]
+            points = [_plain(p) for p in _items(topic.get("points")) if _plain(p)]
             topics.append({"topic": _plain(topic.get("topic")), "points": points})
         elif _plain(topic):
             topics.append({"topic": _plain(topic), "points": []})
@@ -100,8 +128,7 @@ def clean_summary(raw, template=templates.STANDARD):
         if part["kind"] == "paragraph":
             cleaned[part["key"]] = _plain(" ".join(map(str, value)) if isinstance(value, list) else value)
         elif part["kind"] == "bullets":
-            items = value if isinstance(value, list) else [value] if value else []
-            cleaned[part["key"]] = [_plain(v) for v in items if _plain(v)]
+            cleaned[part["key"]] = [_plain(v) for v in _items(value) if _plain(v)]
         else:
             cleaned[part["key"]] = _topics(value)
     return cleaned
@@ -169,6 +196,7 @@ def run_local(system, user, progress=None):
     from mlx_lm.sample_utils import make_sampler
 
     model_name = _models()["local_model"]
+    check_memory(model_name)
     if progress:
         progress(f"loading {model_name.split('/')[-1]}")
     model, tokenizer = load(model_name)
