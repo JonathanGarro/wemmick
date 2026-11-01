@@ -57,7 +57,7 @@ struct SettingsView: View {
             switch tab {
             case .general: general(s)
             case .notes: notesTab(s)
-            case .integrations: integrations(s)
+            case .apps: apps(s)
             case .models: models(s)
             case .about: about(s)
             }
@@ -291,7 +291,7 @@ struct SettingsView: View {
 
     // where to-dos and notes go, and plaud
     @ViewBuilder
-    private func integrations(_ s: SettingsState) -> some View {
+    private func apps(_ s: SettingsState) -> some View {
         SettingsSection("To-dos") {
             Picker(selection: Binding(get: { s.todoApp }, set: { app in
                 Task { await save(SettingsChange(todoApp: app)) }
@@ -745,7 +745,7 @@ struct SettingsView: View {
 enum SettingsTab: String, CaseIterable {
     case general = "General"
     case notes = "Notes"
-    case integrations = "Integrations"
+    case apps = "Apps"
     case models = "Models"
     case about = "About"
 }
