@@ -120,7 +120,7 @@ struct SetupView: View {
             .labelsHidden()
             Text(backend == "local"
                  ? s.localModel == "small"
-                    ? "Nothing leaves this Mac. With \(Int(s.memoryGb ?? 16)) GB of memory, it uses a small model, a 2.3 GB download the first time. Its notes are simpler than Claude's."
+                    ? "Nothing leaves this Mac. With \(Int(s.memoryGb ?? 16)) GB of memory, it uses a small model, a 2.3 GB download the first time. The larger model needs 32 GB. Its notes are simpler than Claude's."
                     : "Nothing leaves this Mac. The model is a 17 GB download the first time, and it works best with 32 GB of memory or more."
                  : "Claude writes better notes, and Ask and finding to-dos use it too. It reads the transcript text, never the audio, with your Anthropic API key.")
                 .foregroundStyle(.secondary)
