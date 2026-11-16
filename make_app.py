@@ -148,12 +148,23 @@ def developer_id():
 
 
 def check_notary():
-    """stop before the long build when the notary credentials aren't saved yet."""
+    """stop before the long build when notarizing would fail: the credentials aren't saved, or
+    can't be read while the mac is locked, or apple turns them down, as it does with a 403
+    when the developer program agreement has changed and isn't accepted yet."""
     result = subprocess.run(["xcrun", "notarytool", "history", "--keychain-profile", NOTARY_PROFILE],
                             env=xcode_env(), capture_output=True, text=True)
-    if result.returncode != 0:
-        raise SystemExit(f"no notary credentials saved as {NOTARY_PROFILE}. Run: xcrun notarytool store-credentials "
+    if result.returncode == 0:
+        return
+    error = (result.stderr or result.stdout).strip()
+    if "No Keychain password item found" in error:
+        raise SystemExit(f"no notary credentials saved as {NOTARY_PROFILE}, or the keychain is locked along with the mac. "
+                         f"Unlock it, or save them with: xcrun notarytool store-credentials "
                          f"{NOTARY_PROFILE} --apple-id <email> --team-id <team id>")
+    hint = ""
+    if "agreement" in error.lower():
+        hint = ("\naccept the new agreement at https://developer.apple.com/account, then wait a few minutes for "
+                "the notary service to see it")
+    raise SystemExit(f"apple's notary service turned down the {NOTARY_PROFILE} credentials:\n{error}{hint}")
 
 
 def sign(path, identity, release, entitlements=None, keep_entitlements=False):
