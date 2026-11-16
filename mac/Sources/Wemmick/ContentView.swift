@@ -284,6 +284,12 @@ struct RecordingView: View {
                 .controlSize(.small)
             LevelMeter(label: "You", level: recorder.micLevel)
             LevelMeter(label: "Call", level: recorder.callLevel)
+            if recorder.mutedInZoom {
+                Label("Muted in Zoom, so your mic isn't recorded", systemImage: "mic.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let problem = recorder.problem {
                 Label(problem, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2)

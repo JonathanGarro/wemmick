@@ -14,6 +14,7 @@ import os
 // none. samples are written to a 16-bit caf in the library's recordings folder, so a crash or
 // quit loses nothing, then compressed to m4a when the recording stops. when the mac's input
 // or output changes mid-call, such as airpods connecting, the recording carries on with it.
+// with the setting on, the mic's channel is silent while you're muted in zoom.
 @Observable @MainActor
 final class Recorder {
     private(set) var startedAt: Date?
@@ -26,15 +27,19 @@ final class Recorder {
     private(set) var micName = ""
     // what's wrong when nothing is being heard, such as a permission not given
     private(set) var problem: String?
+    // true while you're muted in zoom and the mic's channel is left silent
+    private(set) var mutedInZoom = false
     private var session: RecordingSession?
     private var meterTask: Task<Void, Never>?
+    private var muteTask: Task<Void, Never>?
 
     static let folder = Server.appSupport.appending(path: "recordings")
 
     var isRecording: Bool { session != nil }
 
-    // micOnRight puts the mic on the right channel, matching the mic channel setting
-    func start(micOnRight: Bool) throws {
+    // micOnRight puts the mic on the right channel, matching the mic channel setting.
+    // followZoomMute leaves the mic out while you're muted in zoom
+    func start(micOnRight: Bool, followZoomMute: Bool = false) throws {
         guard session == nil else { return }
         try FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
         let date = Date()
@@ -56,6 +61,26 @@ final class Recorder {
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
+        if followZoomMute { watchZoomMute(session) }
+    }
+
+    // zoom's menu is read four times a second off the main thread, so its mute is followed
+    // within a quarter second. the first words after unmuting can be cut by that much
+    private func watchZoomMute(_ session: RecordingSession?) {
+        guard let session else { return }
+        Server.log("leaving out the mic while muted in Zoom" + (ZoomMute.allowed() ? "" : ", but Accessibility isn't allowed"))
+        muteTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let muted = await Task.detached { ZoomMute.isMuted() ?? false }.value
+                guard let self, !Task.isCancelled else { return }
+                session.setMicMuted(muted)
+                if muted != self.mutedInZoom {
+                    self.mutedInZoom = muted
+                    Server.log(muted ? "muted in Zoom, leaving out the mic" : "unmuted in Zoom, recording the mic")
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
     }
 
     // stops and returns the finished caf
@@ -63,6 +88,9 @@ final class Recorder {
     func stop() -> URL? {
         guard let session else { return nil }
         meterTask?.cancel()
+        muteTask?.cancel()
+        muteTask = nil
+        mutedInZoom = false
         session.stop()
         self.session = nil
         startedAt = nil
@@ -170,6 +198,10 @@ private final class RecordingSession: @unchecked Sendable {
     // true while the tap waits on the permission prompt
     private let callStarting = OSAllocatedUnfairLock(initialState: false)
     private let mic = OSAllocatedUnfairLock(initialState: "")
+    // true while you're muted in zoom, when the mic's channel is written silent
+    private let micMuted = OSAllocatedUnfairLock(initialState: false)
+
+    func setMicMuted(_ muted: Bool) { micMuted.withLock { $0 = muted } }
 
     var micName: String { mic.withLock { $0 } }
 
@@ -480,7 +512,8 @@ private final class RecordingSession: @unchecked Sendable {
     }
 
     // the mic mixed to one channel, written beside as many of the call's samples as have
-    // arrived, and silence for the rest
+    // arrived, and silence for the rest. muted in zoom, the mic's channel is silent too, but
+    // its loudest still counts, so a mic that hears nothing is still noticed
     private func writeMic(_ input: UnsafePointer<AudioBufferList>, format: AVAudioFormat, converter: AVAudioConverter?, micIndex: Int) {
         guard let output, let (raw, peak) = Self.mix(input, from: { _ in 0 }, format: format),
               let mono = Self.convert(raw, with: converter), let micData = mono.floatChannelData?[0] else { return }
@@ -489,7 +522,12 @@ private final class RecordingSession: @unchecked Sendable {
         guard frames > 0, let pcm = AVAudioPCMBuffer(pcmFormat: Self.fileFormat, frameCapacity: AVAudioFrameCount(frames)),
               let channels = pcm.floatChannelData else { return }
         pcm.frameLength = AVAudioFrameCount(frames)
-        channels[micIndex].update(from: micData, count: frames)
+        let muted = micMuted.withLock { $0 }
+        if muted {
+            channels[micIndex].update(repeating: 0, count: frames)
+        } else {
+            channels[micIndex].update(from: micData, count: frames)
+        }
         let call = channels[1 - micIndex]
         call.update(repeating: 0, count: frames)
         callSamples.withLockUnchecked { samples in
@@ -498,7 +536,7 @@ private final class RecordingSession: @unchecked Sendable {
             samples.withUnsafeBufferPointer { call.update(from: $0.baseAddress!, count: n) }
             samples.removeFirst(n)
         }
-        peaks.withLock { $0.mic = max($0.mic, peak) }
+        if !muted { peaks.withLock { $0.mic = max($0.mic, peak) } }
         loudest.withLock { $0.mic = max($0.mic, peak) }
         try? output.write(from: pcm)
     }

@@ -25,6 +25,9 @@ struct SettingsView: View {
     @AppStorage(Prefs.plaud) private var plaudEnabled = true
     @AppStorage(Prefs.menuBar) private var showInMenuBar = true
     @AppStorage(Prefs.offerToRecord) private var offerToRecord = true
+    @AppStorage(Prefs.zoomMute) private var zoomMute = false
+    // whether reading zoom's menu is allowed, checked again when wemmick comes back to the front
+    @State private var accessibilityAllowed = ZoomMute.allowed()
     @State private var plaud: PlaudAccount?
     @AppStorage(Prefs.settingsTab) private var tab = SettingsTab.general
 
@@ -174,6 +177,25 @@ struct SettingsView: View {
             Toggle(isOn: $showInMenuBar) {
                 Text("Show in menu bar")
                 Text("Start and stop recording a call from the menu bar, with the window closed.")
+            }
+            Toggle(isOn: Binding(get: { zoomMute }, set: { on in
+                zoomMute = on
+                // macos asks for the permission the first time, and opens nothing after that
+                if on { accessibilityAllowed = ZoomMute.allowed(prompt: true) }
+            })) {
+                Text("Don't record my mic while I'm muted in Zoom")
+                Text("Your side is left silent while you're muted in the Zoom app, read from its Meeting menu. Doesn't work with Zoom in a browser.")
+            }
+            if zoomMute && !accessibilityAllowed {
+                LabeledContent {
+                    Button("Open Accessibility") { ZoomMute.openAccessibilitySettings() }
+                } label: {
+                    Text("Wemmick needs Accessibility to see when you're muted")
+                    Text("Turn Wemmick on under Privacy & Security, Accessibility. Until then your mic is recorded as usual.")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    accessibilityAllowed = ZoomMute.allowed()
+                }
             }
         }
     }

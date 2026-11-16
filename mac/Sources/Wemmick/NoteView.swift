@@ -628,6 +628,8 @@ enum Prefs {
     static let menuBar = "showInMenuBar"
     // a notification offering to record when a call app starts using the mic
     static let offerToRecord = "offerToRecordCalls"
+    // the mic left out of a recording while you're muted in zoom, off unless switched on
+    static let zoomMute = "leaveOutMicWhenZoomMuted"
     // checking for updates was switched off, from before sparkle, which keeps its own setting
     static let checkUpdates = "checkForUpdates"
     // the settings tab last shown
