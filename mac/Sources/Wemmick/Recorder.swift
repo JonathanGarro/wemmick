@@ -29,6 +29,11 @@ final class Recorder {
     private(set) var problem: String?
     // true while you're muted in zoom and the mic's channel is left silent
     private(set) var mutedInZoom = false
+    // the audio hijack session recording alongside as a backup, and whether that's going
+    private(set) var backup: (text: String, ok: Bool)?
+    // answers whether this recording started the audio hijack session, so stopping stops it.
+    // one already running is left running
+    private var backupStart: (name: String, task: Task<Bool, Never>)?
     private var session: RecordingSession?
     private var meterTask: Task<Void, Never>?
     private var muteTask: Task<Void, Never>?
@@ -38,8 +43,9 @@ final class Recorder {
     var isRecording: Bool { session != nil }
 
     // micOnRight puts the mic on the right channel, matching the mic channel setting.
-    // followZoomMute leaves the mic out while you're muted in zoom
-    func start(micOnRight: Bool, followZoomMute: Bool = false) throws {
+    // followZoomMute leaves the mic out while you're muted in zoom. audioHijackSession names
+    // an audio hijack session to run alongside, as a backup
+    func start(micOnRight: Bool, followZoomMute: Bool = false, audioHijackSession: String? = nil) throws {
         guard session == nil else { return }
         try FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
         let date = Date()
@@ -62,6 +68,36 @@ final class Recorder {
             }
         }
         if followZoomMute { watchZoomMute(session) }
+        if let audioHijackSession { startBackup(audioHijackSession) }
+    }
+
+    private func startBackup(_ name: String) {
+        backup = ("Starting \(name) in Audio Hijack…", true)
+        let task = Task { [weak self] () -> Bool in
+            let outcome = await AudioHijack.start(session: name)
+            let (text, ok): (String, Bool) = switch outcome {
+            case .started, .stopped: ("Audio Hijack is recording too, in \(name)", true)
+            case .already: ("\(name) was already running in Audio Hijack, and is left running", true)
+            case .missing: ("Audio Hijack has no session named \(name). Check the name in Settings, Recording.", false)
+            case nil: ("Audio Hijack didn't answer, so it isn't recording. Turn on Allow execution of external scripts in its Settings, Advanced.", false)
+            }
+            Server.log("backup in Audio Hijack: \(outcome?.rawValue ?? "no answer") (\(name))")
+            if let self, self.backupStart?.name == name, self.isRecording { self.backup = (text, ok) }
+            return outcome == .started
+        }
+        backupStart = (name, task)
+    }
+
+    // stops the audio hijack session if this recording started it, once it's done starting
+    private func stopBackup() {
+        guard let (name, task) = backupStart else { return }
+        backupStart = nil
+        backup = nil
+        Task {
+            guard await task.value else { return }
+            let outcome = await AudioHijack.stop(session: name)
+            Server.log("backup in Audio Hijack: \(outcome?.rawValue ?? "no answer to stopping") (\(name))")
+        }
     }
 
     // zoom's menu is read four times a second off the main thread, so its mute is followed
@@ -91,6 +127,7 @@ final class Recorder {
         muteTask?.cancel()
         muteTask = nil
         mutedInZoom = false
+        stopBackup()
         session.stop()
         self.session = nil
         startedAt = nil
@@ -197,6 +234,21 @@ private final class RecordingSession: @unchecked Sendable {
     private let callReceived = OSAllocatedUnfairLock(initialState: false)
     // true while the tap waits on the permission prompt
     private let callStarting = OSAllocatedUnfairLock(initialState: false)
+    // when the call side last delivered samples, for the watchdog below
+    private let lastCall = OSAllocatedUnfairLock<Date?>(initialState: nil)
+    // true while nothing has come from the call side since the output changed, for the warning
+    private let callStalled = OSAllocatedUnfairLock(initialState: false)
+    // the rest are only touched on the call control queue. bluetooth headphones switch from
+    // 44.1 or 48 khz to 16 or 24 khz when their mic starts, a moment after they become the
+    // output, and a device built on them before that delivers nothing from then on, so the
+    // call side is rebuilt when the output's rate changes too, and by a watchdog when it stalls
+    private var callOutput = AudioObjectID(kAudioObjectUnknown)
+    private var rateListener: AudioObjectPropertyListenerBlock?
+    private var callAttempt: Date?
+    private var stallRestarts = 0
+    private var outputChanged = false
+    private var restartGeneration = 0
+    private var watchdog: DispatchSourceTimer?
     private let mic = OSAllocatedUnfairLock(initialState: "")
     // true while you're muted in zoom, when the mic's channel is written silent
     private let micMuted = OSAllocatedUnfairLock(initialState: false)
@@ -220,6 +272,9 @@ private final class RecordingSession: @unchecked Sendable {
         mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
     private static let defaultOutputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    private static let nominalRateAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyNominalSampleRate,
         mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
     private static let processListAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyProcessObjectList,
@@ -287,6 +342,7 @@ private final class RecordingSession: @unchecked Sendable {
         }
         watchOutput()
         watchProcesses()
+        watchCall()
     }
 
     // everything the mac plays, mixed to stereo, and left playing as usual
@@ -396,10 +452,19 @@ private final class RecordingSession: @unchecked Sendable {
         try check(AudioDeviceStart(callDevice, callProc), "Couldn't start recording the Mac's audio")
         callStarted.withLock { $0 = Date() }
         Server.log("recording the Mac's audio through \(Self.name(of: outputDevice)) at \(Int(rate)) Hz")
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.scheduleRestart("the Mac's output changed its sample rate during the recording")
+        }
+        var address = Self.nominalRateAddress
+        if AudioObjectAddPropertyListenerBlock(outputDevice, &address, callControl, block) == noErr {
+            callOutput = outputDevice
+            rateListener = block
+        }
     }
 
     // a new tap and the device holding it. runs on the call control queue
     private func startCall() {
+        callAttempt = Date()
         do {
             try makeTap()
             try connectCall()
@@ -409,6 +474,12 @@ private final class RecordingSession: @unchecked Sendable {
     }
 
     private func stopCall() {
+        if let rateListener, callOutput != kAudioObjectUnknown {
+            var address = Self.nominalRateAddress
+            AudioObjectRemovePropertyListenerBlock(callOutput, &address, callControl, rateListener)
+        }
+        rateListener = nil
+        callOutput = AudioObjectID(kAudioObjectUnknown)
         Self.destroy(&callDevice, &callProc)
         if tapID != kAudioObjectUnknown {
             AudioHardwareDestroyProcessTap(tapID)
@@ -452,15 +523,57 @@ private final class RecordingSession: @unchecked Sendable {
     // and the call side follows its output, since the device it's in goes with the old one
     private func watchOutput() {
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            guard let self, self.callOn.withLock({ $0 }), self.callDevice != kAudioObjectUnknown else { return }
-            Server.log("the Mac's output changed during the recording")
-            self.stopCall()
-            self.startCall()
+            self?.scheduleRestart("the Mac's output changed during the recording")
         }
         var address = Self.defaultOutputAddress
         if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, callControl, block) == noErr {
             outputListener = block
         }
+    }
+
+    // headphones connecting change the output, then its rate, then the input, within a second
+    // or so, so the call side is rebuilt once things settle rather than at each step. runs on
+    // the call control queue
+    private func scheduleRestart(_ reason: String) {
+        guard callOn.withLock({ $0 }), callAttempt != nil else { return }
+        Server.log(reason)
+        outputChanged = true
+        restartGeneration += 1
+        let generation = restartGeneration
+        callControl.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, generation == self.restartGeneration, self.callOn.withLock({ $0 }) else { return }
+            self.stopCall()
+            self.startCall()
+        }
+    }
+
+    // a call side that's delivered nothing for a while is rebuilt, waiting longer each time
+    // up to a minute, since an idle mac may deliver nothing for real
+    private func watchCall() {
+        let timer = DispatchSource.makeTimerSource(queue: callControl)
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in self?.checkCall() }
+        timer.resume()
+        watchdog = timer
+    }
+
+    private func checkCall() {
+        guard callOn.withLock({ $0 }), !callStarting.withLock({ $0 }), let attempt = callAttempt else { return }
+        let last = lastCall.withLock { $0 }
+        if let last, last >= attempt {
+            stallRestarts = 0
+            outputChanged = false
+            callStalled.withLock { $0 = false }
+        }
+        let quiet = -max(last ?? attempt, attempt).timeIntervalSinceNow
+        guard quiet > min(60, 5 * pow(2, Double(stallRestarts))) else { return }
+        if stallRestarts == 0 {
+            Server.log(String(format: "nothing from the Mac's audio for %.0f s, starting it again", quiet))
+        }
+        stallRestarts += 1
+        if outputChanged, stallRestarts >= 2 { callStalled.withLock { $0 = true } }
+        stopCall()
+        startCall()
     }
 
     // every channel in a buffer list mixed to one, into a mono buffer at the device's rate.
@@ -547,6 +660,7 @@ private final class RecordingSession: @unchecked Sendable {
         guard let (raw, peak) = Self.mix(input, from: { max(0, $0 - 2) }, format: format),
               let mono = Self.convert(raw, with: converter), let data = mono.floatChannelData?[0] else { return }
         callReceived.withLock { $0 = true }
+        lastCall.withLock { $0 = Date() }
         let frames = Int(mono.frameLength)
         callSamples.withLockUnchecked { samples in
             samples.append(contentsOf: UnsafeBufferPointer(start: data, count: frames))
@@ -577,6 +691,9 @@ private final class RecordingSession: @unchecked Sendable {
         if callSilent, answeredPrompt.withLock({ $0 }) {
             return "Nothing from the Mac's audio yet. If you chose Don't Allow, allow Wemmick under Screen & System Audio Recording to record the call."
         }
+        if callStalled.withLock({ $0 }) {
+            return "Nothing has come from the Mac's audio since the output changed. If the call is playing, stop and record again. Your mic is recording."
+        }
         return nil
     }
 
@@ -606,6 +723,8 @@ private final class RecordingSession: @unchecked Sendable {
             }
             outputListener = nil
             processListener = nil
+            watchdog?.cancel()
+            watchdog = nil
             callOn.withLock { $0 = false }
             stopCall()
         }

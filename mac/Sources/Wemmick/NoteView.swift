@@ -630,6 +630,10 @@ enum Prefs {
     static let offerToRecord = "offerToRecordCalls"
     // the mic left out of a recording while you're muted in zoom, off unless switched on
     static let zoomMute = "leaveOutMicWhenZoomMuted"
+    // an audio hijack session started and stopped with each recording, as a backup
+    static let audioHijack = "alsoRecordWithAudioHijack"
+    static let audioHijackSession = "audioHijackSession"
+    static let defaultAudioHijackSession = "Voice Chat"
     // checking for updates was switched off, from before sparkle, which keeps its own setting
     static let checkUpdates = "checkForUpdates"
     // the settings tab last shown

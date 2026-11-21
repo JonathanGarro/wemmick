@@ -290,6 +290,12 @@ struct RecordingView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let backup = recorder.backup {
+                Label(backup.text, systemImage: backup.ok ? "record.circle" : "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(backup.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let problem = recorder.problem {
                 Label(problem, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2)

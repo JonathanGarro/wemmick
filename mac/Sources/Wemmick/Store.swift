@@ -237,8 +237,12 @@ final class Store {
                 throw RecorderError("Wemmick isn't allowed to use the microphone. Allow it in System Settings, Privacy & Security, Microphone")
             }
             let settings: SettingsState = try await API.get(["api", "settings"])
+            let defaults = UserDefaults.standard
+            let backup = (defaults.string(forKey: Prefs.audioHijackSession) ?? "").trimmingCharacters(in: .whitespaces)
             try recorder.start(micOnRight: settings.micChannel == "right",
-                               followZoomMute: UserDefaults.standard.bool(forKey: Prefs.zoomMute))
+                               followZoomMute: defaults.bool(forKey: Prefs.zoomMute),
+                               audioHijackSession: defaults.bool(forKey: Prefs.audioHijack) && AudioHijack.installed
+                                   ? (backup.isEmpty ? Prefs.defaultAudioHijackSession : backup) : nil)
         }
     }
 

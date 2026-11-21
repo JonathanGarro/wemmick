@@ -26,6 +26,8 @@ struct SettingsView: View {
     @AppStorage(Prefs.menuBar) private var showInMenuBar = true
     @AppStorage(Prefs.offerToRecord) private var offerToRecord = true
     @AppStorage(Prefs.zoomMute) private var zoomMute = false
+    @AppStorage(Prefs.audioHijack) private var audioHijack = false
+    @AppStorage(Prefs.audioHijackSession) private var audioHijackSession = Prefs.defaultAudioHijackSession
     // whether reading zoom's menu is allowed, checked again when wemmick comes back to the front
     @State private var accessibilityAllowed = ZoomMute.allowed()
     @State private var plaud: PlaudAccount?
@@ -195,6 +197,18 @@ struct SettingsView: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     accessibilityAllowed = ZoomMute.allowed()
+                }
+            }
+            if AudioHijack.installed {
+                Toggle(isOn: $audioHijack) {
+                    Text("Also record with Audio Hijack")
+                    Text("Starts an Audio Hijack session with each recording and stops it after, as a backup. Needs Allow execution of external scripts on in Audio Hijack's Settings, Advanced.")
+                }
+                if audioHijack {
+                    TextField(text: $audioHijackSession, prompt: Text(Prefs.defaultAudioHijackSession)) {
+                        Text("Audio Hijack session")
+                        Text("Its name exactly as Audio Hijack shows it. One already running is left running.")
+                    }
                 }
             }
         }
